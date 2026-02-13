@@ -1,5 +1,3 @@
-# vllm-perf
-
 Two small, dependency-light tools for testing **vLLM** deployments that expose the **OpenAI-compatible Chat Completions API**.
 
 * **`vllm-bench.py`**: single-request benchmarking (repeat N times)
