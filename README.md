@@ -1,159 +1,228 @@
-# vllm-bench
+# vllm-perf
 
-Simple, dependency-light benchmark tool for **vLLM** deployments that expose the **OpenAI-compatible Chat Completions API**.
+Two small, dependency-light tools for testing **vLLM** deployments that expose the **OpenAI-compatible Chat Completions API**.
+
+* **`vllm-bench.py`**: single-request benchmarking (repeat N times)
+* **`vllm-load.py`**: concurrent load testing (N total requests, limited by concurrency)
+
+Both scripts support:
+
+* ✅ Pretty table/box output + ANSI color (auto-disabled when stdout is not a TTY)
+* ✅ `--server` flag (recommended way to point at your endpoint)
+* ✅ `--insecure` to skip TLS verification (curl `-k` equivalent)
+* ✅ Optional Bearer token auth (`--token` or `--token-env`)
 
 ## Inspired by
 
-- Country Boy Computers blog: https://countryboycomputersbg.com/blog/
-- Country Boy Computers on YouTube: https://www.youtube.com/@CountryBoyComputers
-
-It measures:
-- **Total latency** per request
-- **TTFT (Time To First Token)** when using `--stream`
-- **Generation throughput (tokens/sec)** using `usage.completion_tokens`
-- **Token counts**: `pTok` (prompt tokens) and `cTok` (completion tokens)
-
-Output is formatted with box/table summaries and **ANSI color** (auto-disabled when stdout is not a TTY).
-
-<img width="781" height="650" alt="image" src="https://github.com/user-attachments/assets/01d54a45-ffc6-4b83-bee0-30a3d1a477e5" />
-
+* Country Boy Computers blog: [https://countryboycomputersbg.com/blog/](https://countryboycomputersbg.com/blog/)
+* Country Boy Computers on YouTube: [https://www.youtube.com/@CountryBoyComputers](https://www.youtube.com/@CountryBoyComputers)
 
 ---
 
 ## Requirements
 
-- Python 3.x
-- `requests`
+* Python 3.x
+* `requests`
 
-Install dependency:
+Install:
 
 ```bash
 pip install requests
-````
+```
 
 ---
 
 ## Quick start
 
-1. Set your server at the top of `vllm-bench.py`:
+### 1) Benchmark a server (single request repeated)
 
-```python
-SERVER = "https://your-vllm-host.example.com"
-```
-
-2. Run a benchmark:
-
-### Stream mode (recommended)
-
-Measures TTFT and throughput:
+**Streaming mode (recommended):**
 
 ```bash
-python3 vllm-bench.py --stream --runs 5 --max_tokens 512
+python3 vllm-bench.py \
+  --server https://my-vllm.apps.example.net \
+  --stream \
+  --runs 5 \
+  --max_tokens 512
 ```
 
-### Non-stream mode
-
-Measures total latency and throughput (TTFT is not measurable without streaming):
+**Non-stream mode:**
 
 ```bash
-python3 vllm-bench.py --runs 5 --max_tokens 512
+python3 vllm-bench.py \
+  --server https://my-vllm.apps.example.net \
+  --runs 5 \
+  --max_tokens 512
 ```
+
+---
+
+### 2) Load test a server (concurrent requests)
+
+Example: **20 total requests**, up to **20 in flight** at a time:
+
+```bash
+python3 vllm-load.py \
+  --server https://my-vllm.apps.example.net \
+  --model gpt-oss-20b \
+  --requests 20 \
+  --concurrency 20 \
+  --stream \
+  --max_tokens 512
+```
+
+If you want multiple “waves” of requests (more samples without increasing pressure), do `requests > concurrency`:
+
+```bash
+python3 vllm-load.py \
+  --server https://my-vllm.apps.example.net \
+  --model gpt-oss-20b \
+  --requests 200 \
+  --concurrency 20 \
+  --stream
+```
+
+---
+
+## TLS: self-signed / lab endpoints
+
+Skip TLS verification (curl `-k` equivalent):
+
+```bash
+python3 vllm-bench.py --server https://my-vllm.apps.example.net --stream --insecure
+python3 vllm-load.py  --server https://my-vllm.apps.example.net --stream --insecure --requests 50 --concurrency 10
+```
+
+---
+
+## Auth: endpoints requiring a token
+
+### Recommended: env var
+
+```bash
+export VLLM_TOKEN="REDACTED"
+
+python3 vllm-bench.py --server https://my-vllm.apps.example.net --stream
+python3 vllm-load.py  --server https://my-vllm.apps.example.net --stream --requests 50 --concurrency 10
+```
+
+### Or pass directly
+
+```bash
+python3 vllm-bench.py --server https://my-vllm.apps.example.net --stream --token "REDACTED"
+python3 vllm-load.py  --server https://my-vllm.apps.example.net --stream --token "REDACTED" --requests 50 --concurrency 10
+```
+
+### Use a different env var name
+
+```bash
+export MY_TOKEN="REDACTED"
+python3 vllm-bench.py --server https://my-vllm.apps.example.net --token-env MY_TOKEN --stream
+```
+
+> The tools **never print your token**.
 
 ---
 
 ## What the columns mean
 
+Both tools use the same column names and formatting.
+
 * **Total(s)**: End-to-end time for the request (seconds).
-* **TTFB**: *Time to First Stream Event* (milliseconds).  
+* **TTFB**: *Time To First Byte / first stream event* (milliseconds).
   Time until the first streaming `data:` event is received and successfully parsed. Only available with `--stream`.
-* **TTFT**: *Time to First Token* (milliseconds).  
-  Time until the first generated **content token** is observed in the stream (`delta.content`). Only available with `--stream`.  
-  If the server never emits `delta.content`, TTFT falls back to TTFB so it won’t be blank.
+* **TTFT**: *Time To First Token* (milliseconds).
+  Time until the first generated **content token** is observed in the stream (`delta.content`). Only available with `--stream`.
+  If the server never emits `delta.content`, TTFT may fall back to TTFB.
 * **pTok**: Prompt tokens (`usage.prompt_tokens`).
 * **cTok**: Completion tokens (`usage.completion_tokens`).
-* **e2e(tok/s)**: End-to-end throughput (tokens/sec), computed as: `cTok / Total`.  
-  This is the most stable speed metric for comparing runs/models.
-* **gen(tok/s)**: Generation throughput after first token (tokens/sec), computed as: `cTok / (Total - TTFT)`.  
-  This can appear very high if the server buffers output and then streams it in a burst.
+* **e2e(tok/s)**: End-to-end throughput (tokens/sec), computed as: `cTok / Total`.
+  Most stable speed metric for comparing runs/models.
+* **gen(tok/s)**: Generation throughput after first token (tokens/sec), computed as: `cTok / (Total - TTFT)`.
+  Can look inflated if output is buffered then streamed in bursts.
+* **HTTP** (load test only): HTTP status code returned by the server.
 
-> Note: If your vLLM deployment does not return `usage`, `pTok/cTok` and the speed columns may show as `?` / `N/A`.
+> Note: If your vLLM deployment does not return `usage`, `pTok/cTok` and speed columns may show as `?` / `N/A`.
 
 ---
 
 ## Flags
 
-You can view all flags anytime:
+Always refer to built-in help for the authoritative list:
 
 ```bash
 python3 vllm-bench.py --help
+python3 vllm-load.py --help
 ```
 
-Current options:
+### Common flags (both tools)
 
 * `--server SERVER`
-  Base server URL. Defaults to the `SERVER` constant at top of file.
-
-* `--prompt PROMPT`
-  Prompt to use.
-
-* `--runs RUNS`
-  Number of benchmark iterations.
-
-* `--max_tokens MAX_TOKENS`
-  Max tokens to generate per run.
-
-* `--temperature TEMPERATURE`
-  Sampling temperature.
-
-* `--timeout TIMEOUT`
-  HTTP timeout seconds.
+  Base server URL (**recommended** way to set the endpoint).
 
 * `--stream`
-  Enable streaming to measure TTFT.
+  Enable streaming to measure **TTFB/TTFT**.
+
+* `--timeout SECONDS`
+  HTTP timeout.
+
+* `--temperature FLOAT`
+  Sampling temperature.
+
+* `--max_tokens N`
+  Max tokens per response.
 
 * `--model MODEL`
-  Override model name (otherwise uses the first model returned by `/v1/models`).
+  Override model name (otherwise use first model returned by `/v1/models`).
 
----
+* `--insecure`
+  Skip TLS certificate verification (curl `-k` equivalent).
 
-## Examples
+* `--token TOKEN`
+  Send `Authorization: Bearer <TOKEN>`.
 
-Benchmark a specific server without editing the script:
+* `--token-env ENV_VAR`
+  Read bearer token from env var (default: `VLLM_TOKEN`).
+  If `--token` is provided, it wins.
 
-```bash
-python3 vllm-bench.py --server https://my-vllm.apps.example.net --stream
-```
+### Bench-only flags
 
-Benchmark with a custom prompt:
+* `--runs N`
+  Number of benchmark iterations.
 
-```bash
-python3 vllm-bench.py --stream --prompt "Summarize the plot of Hamlet in 5 bullet points."
-```
+* `--prompt TEXT`
+  Prompt to use.
 
-Override the model (if your `/v1/models` returns multiple):
+### Load-only flags
 
-```bash
-python3 vllm-bench.py --stream --model my-model-name
-```
+* `--requests N`
+  Total number of requests to send.
+
+* `--concurrency N`
+  Maximum number of requests in flight at once.
+
+* `--prompt TEXT`
+  Prompt template. Use `{i}` to inject request number (keeps each request unique).
 
 ---
 
 ## API compatibility
 
-This tool targets vLLM’s OpenAI-compatible endpoints:
+Targets vLLM’s OpenAI-compatible endpoints:
 
 * `GET  /v1/models`
 * `POST /v1/chat/completions`
 
-In streaming mode, it expects SSE responses like:
+Streaming mode expects SSE lines like:
 
 * `data: {...json...}`
 * `data: [DONE]`
 
 ---
 
-## Notes / gotchas
+## Notes
 
-* **First request is often slower (TTFT)** due to warm caches, TLS session reuse, and model runtime warm-up.
-* If you set `--max_tokens 512` and always see `cTok = 512`, you are consistently hitting the generation cap.
-* Tokenization is model/tokenizer specific — `pTok` may differ between models for the same prompt.
+* The **first request is often slower** due to warm-up effects.
+* If you set `--max_tokens 512` and always see `cTok = 512`, you’re consistently hitting the cap.
+* Tokenization differs across models; `pTok` may vary for the same prompt.
+* Under load (`vllm-load.py`), **TTFT often balloons** due to queueing; **e2e(tok/s)** is usually the best apples-to-apples metric.

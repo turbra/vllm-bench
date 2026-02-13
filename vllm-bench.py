@@ -1,4 +1,6 @@
+#!/usr/bin/env python3
 import argparse
+import os
 import json
 import re
 import time
@@ -11,6 +13,11 @@ from typing import Optional, Tuple
 
 import requests
 
+try:
+    import urllib3  # type: ignore
+except Exception:
+    urllib3 = None  # type: ignore
+
 # -----------------------------------------------------------------------------
 # Defaults (edit here, or override with CLI args)
 # -----------------------------------------------------------------------------
@@ -19,6 +26,7 @@ DEFAULT_TIMEOUT = 120.0
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_RUNS = 5
 DEFAULT_MAX_TOKENS = 512
+DEFAULT_TOKEN_ENV = "VLLM_TOKEN"
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -133,9 +141,9 @@ def build_urls(server: str) -> Tuple[str, str]:
     return f"{server}/v1/chat/completions", f"{server}/v1/models"
 
 
-def get_loaded_model(models_endpoint: str, timeout: float) -> str:
+def get_loaded_model(models_endpoint: str, timeout: float, headers: dict, verify: bool) -> str:
     try:
-        resp = requests.get(models_endpoint, timeout=timeout)
+        resp = requests.get(models_endpoint, timeout=timeout, headers=headers, verify=verify)
         resp.raise_for_status()
         data = resp.json()
         return data["data"][0]["id"]
@@ -147,7 +155,7 @@ def get_loaded_model(models_endpoint: str, timeout: float) -> str:
         return "Unknown Model"
 
 
-def post_chat_completions(endpoint: str, payload: dict, timeout: float, stream: bool) -> requests.Response:
+def post_chat_completions(endpoint: str, payload: dict, timeout: float, stream: bool, headers: dict, verify: bool) -> requests.Response:
     """
     POST to /v1/chat/completions.
     If it returns 404, try a common fallback (/v1/chat/completion).
@@ -159,7 +167,7 @@ def post_chat_completions(endpoint: str, payload: dict, timeout: float, stream: 
     last_err: Optional[Exception] = None
     for ep in try_endpoints:
         try:
-            r = requests.post(ep, json=payload, timeout=timeout, stream=stream)
+            r = requests.post(ep, json=payload, timeout=timeout, stream=stream, headers=headers, verify=verify)
             if r.status_code == 404:
                 last_err = requests.exceptions.HTTPError(f"404 Not Found for url: {ep}")
                 continue
@@ -178,6 +186,8 @@ def run_once_non_stream(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    headers: dict,
+    verify: bool,
 ) -> Tuple[float, Optional[int], Optional[int], Optional[float]]:
     payload = {
         "model": model,
@@ -188,7 +198,7 @@ def run_once_non_stream(
     }
 
     t0 = perf_counter()
-    r = post_chat_completions(endpoint, payload, timeout=timeout, stream=False)
+    r = post_chat_completions(endpoint, payload, timeout=timeout, stream=False, headers=headers, verify=verify)
     t1 = perf_counter()
 
     data = r.json()
@@ -210,6 +220,8 @@ def run_once_stream(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    headers: dict,
+    verify: bool,
 ) -> Tuple[float, float, float, Optional[int], Optional[int], Optional[float], Optional[float]]:
     """
     Returns:
@@ -231,7 +243,7 @@ def run_once_stream(
     }
 
     t0 = perf_counter()
-    r = post_chat_completions(endpoint, payload, timeout=timeout, stream=True)
+    r = post_chat_completions(endpoint, payload, timeout=timeout, stream=True, headers=headers, verify=verify)
 
     ttfb_s: Optional[float] = None
     ttft_s: Optional[float] = None
@@ -307,11 +319,14 @@ def benchmark_vllm(
     timeout: float,
     stream: bool,
     model_override: Optional[str],
+    headers: dict,
+    verify: bool,
+    auth_desc: str,
 ):
     width = min(_term_width(), 96)
 
     chat_endpoint, models_endpoint = build_urls(server)
-    model_name = model_override or get_loaded_model(models_endpoint, timeout=timeout)
+    model_name = model_override or get_loaded_model(models_endpoint, timeout=timeout, headers=headers, verify=verify)
 
     # "Pretty" URL presentation
     host = _host(server)
@@ -323,6 +338,8 @@ def benchmark_vllm(
         f"Host        : {host}",
         f"API         : {api_path}",
         f"Models      : {models_path}",
+        f"Auth        : {auth_desc}",
+        f"TLS verify  : {'ON' if verify else 'OFF (--insecure)'}",
         f"Mode        : {'stream (TTFT enabled)' if stream else 'non-stream'}",
         f"Runs        : {runs}",
         f"Max tokens  : {max_tokens}",
@@ -349,7 +366,7 @@ def benchmark_vllm(
     for i in range(runs):
         if stream:
             total_s, ttfb_s, ttft_s, p_tok, c_tok, tps_e2e, tps_gen = run_once_stream(
-                chat_endpoint, model_name, prompt, max_tokens, temperature, timeout
+                chat_endpoint, model_name, prompt, max_tokens, temperature, timeout, headers, verify
             )
             totals.append(total_s)
             if ttft_s == ttft_s:  # not NaN
@@ -360,7 +377,7 @@ def benchmark_vllm(
                 speeds.append(float(tps_e2e))
         else:
             total_s, p_tok, c_tok, tps_e2e = run_once_non_stream(
-                chat_endpoint, model_name, prompt, max_tokens, temperature, timeout
+                chat_endpoint, model_name, prompt, max_tokens, temperature, timeout, headers, verify
             )
             totals.append(total_s)
 
@@ -451,14 +468,46 @@ if __name__ == "__main__":
     parser.add_argument("--max_tokens", type=int, default=DEFAULT_MAX_TOKENS, help="Max tokens per run.")
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE, help="Sampling temperature.")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="HTTP timeout seconds.")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Skip TLS certificate verification (like curl -k).",
+    )
+    parser.add_argument(
+        "--token",
+        type=str,
+        default="",
+        help="Bearer token for Authorization header (optional). Prefer --token-env to avoid shell history.",
+    )
+    parser.add_argument(
+        "--token-env",
+        type=str,
+        default="VLLM_TOKEN",
+        help="Environment variable name containing bearer token (default: VLLM_TOKEN).",
+    )
     parser.add_argument("--stream", action="store_true", help="Enable streaming to measure TTFT.")
     parser.add_argument("--model", type=str, default=None, help="Override model name (else use /v1/models).")
 
     args = parser.parse_args()
+    # Auth / TLS options
+    verify = not args.insecure
+    if not verify and urllib3 is not None:
+        try:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+
+    token = (args.token or '').strip() or (os.environ.get(args.token_env or '') or '').strip()
+    headers: dict = {}
+    auth_desc = 'none'
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+        auth_desc = 'Bearer token'
+
 
     # Guard: fail fast if placeholder wasn't replaced (but allow CLI override)
     server = args.server.strip()
-    if server in ("REPLACE_ME", "") or "your-vllm-host.example.com" in server or "<your-route-hostname>" in server:
+    if server in ("REPLACE_ME", "") or "your-vllm-host.example.com" in server or "<your-route-hostname>" in server or "vllm-endpoint.example.com" in server:
         raise SystemExit(
             "SERVER is still a placeholder. Set SERVER at top of file (e.g. https://your-vllm-host.example.com) "
             "or run with --server https://<your-route-hostname>."
@@ -473,4 +522,7 @@ if __name__ == "__main__":
         timeout=args.timeout,
         stream=args.stream,
         model_override=args.model,
+        headers=headers,
+        verify=verify,
+        auth_desc=auth_desc,
     )
