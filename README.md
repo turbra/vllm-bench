@@ -54,6 +54,7 @@ python3 vllm-bench.py \
   --runs 5 \
   --max_tokens 512
 ```
+<img width="775" height="667" alt="image" src="https://github.com/user-attachments/assets/8cfd25d7-cee6-4bbb-9299-a1dbb1951c80" />
 
 ---
 
@@ -81,6 +82,7 @@ python3 vllm-load.py \
   --concurrency 20 \
   --stream
 ```
+<img width="889" height="1026" alt="image" src="https://github.com/user-attachments/assets/88863388-8951-4a2e-8660-5591f53d0c75" />
 
 ---
 
