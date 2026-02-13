@@ -62,14 +62,20 @@ python3 vllm-bench.py --runs 5 --max_tokens 512
 
 ## What the columns mean
 
-* **Total(s)**: End-to-end time for the request (seconds)
-* **TTFT**: Time to first generated token (milliseconds). Only available with `--stream`
-* **pTok**: Prompt tokens (`usage.prompt_tokens`)
-* **cTok**: Completion tokens (`usage.completion_tokens`)
-* **Speed(tok/s)**: Approx. generation speed (tokens/sec).
-  In stream mode, computed using roughly: `cTok / (Total - TTFT)`.
+* **Total(s)**: End-to-end time for the request (seconds).
+* **TTFB**: *Time to First Stream Event* (milliseconds).  
+  Time until the first streaming `data:` event is received and successfully parsed. Only available with `--stream`.
+* **TTFT**: *Time to First Token* (milliseconds).  
+  Time until the first generated **content token** is observed in the stream (`delta.content`). Only available with `--stream`.  
+  If the server never emits `delta.content`, TTFT falls back to TTFB so it won’t be blank.
+* **pTok**: Prompt tokens (`usage.prompt_tokens`).
+* **cTok**: Completion tokens (`usage.completion_tokens`).
+* **e2e(tok/s)**: End-to-end throughput (tokens/sec), computed as: `cTok / Total`.  
+  This is the most stable speed metric for comparing runs/models.
+* **gen(tok/s)**: Generation throughput after first token (tokens/sec), computed as: `cTok / (Total - TTFT)`.  
+  This can appear very high if the server buffers output and then streams it in a burst.
 
-> Note: If your vLLM deployment does not return `usage`, `pTok/cTok/speed` may show as `?` / `N/A`.
+> Note: If your vLLM deployment does not return `usage`, `pTok/cTok` and the speed columns may show as `?` / `N/A`.
 
 ---
 

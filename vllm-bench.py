@@ -14,7 +14,7 @@ import requests
 # -----------------------------------------------------------------------------
 # Defaults (edit here, or override with CLI args)
 # -----------------------------------------------------------------------------
-SERVER = "https://your-vllm-host.example.com"
+SERVER = "https://vllm-endpoint.example.com"
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_RUNS = 5
@@ -93,6 +93,7 @@ def _box(title: str, lines: list[str], width: int = 72) -> str:
     mid = f"│ {bold(title[:width-4]).ljust(width-4 + (len(bold('')) - len('')))} │" if USE_COLOR else f"│ {title[:width-4].ljust(width-4)} │"
     sep = f"├{_hr('─', width-2)}┤"
 
+    # NOTE: Keep the visible text aligned even with ANSI codes by coloring only values, not padding.
     body_lines = []
     for ln in lines:
         # Ensure hard wrap for long lines (urls, etc.)
@@ -209,7 +210,17 @@ def run_once_stream(
     max_tokens: int,
     temperature: float,
     timeout: float,
-) -> Tuple[float, float, Optional[int], Optional[int], Optional[float]]:
+) -> Tuple[float, float, float, Optional[int], Optional[int], Optional[float], Optional[float]]:
+    """
+    Returns:
+      total_time_s,
+      ttfb_s (time to first stream event),
+      ttft_s (time to first content token),
+      prompt_tokens,
+      completion_tokens,
+      speed_e2e (cTok / total),
+      speed_gen (cTok / (total - ttft))
+    """
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -222,6 +233,7 @@ def run_once_stream(
     t0 = perf_counter()
     r = post_chat_completions(endpoint, payload, timeout=timeout, stream=True)
 
+    ttfb_s: Optional[float] = None
     ttft_s: Optional[float] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
@@ -229,7 +241,6 @@ def run_once_stream(
     for raw_line in r.iter_lines(decode_unicode=True):
         if not raw_line:
             continue
-
         line = raw_line.strip()
         if not line.startswith("data:"):
             continue
@@ -238,12 +249,16 @@ def run_once_stream(
         if chunk == "[DONE]":
             break
 
+        # Record TTFB on first JSON event we successfully parse
         try:
             evt = json.loads(chunk)
         except json.JSONDecodeError:
             continue
 
-        # TTFT: first time we see actual content in delta
+        if ttfb_s is None:
+            ttfb_s = perf_counter() - t0
+
+        # Record TTFT when we see first actual content
         try:
             delta = evt["choices"][0].get("delta", {})
             content = delta.get("content")
@@ -252,7 +267,6 @@ def run_once_stream(
         except Exception:
             pass
 
-        # usage may appear on a chunk if include_usage is supported
         u = evt.get("usage")
         if isinstance(u, dict):
             if isinstance(u.get("prompt_tokens"), int):
@@ -263,16 +277,25 @@ def run_once_stream(
     t1 = perf_counter()
     total_time_s = t1 - t0
 
+    # Fallbacks:
+    if ttfb_s is None:
+        ttfb_s = float("nan")
     if ttft_s is None:
-        ttft_s = float("nan")
+        # If we never saw content, fall back TTFT to TTFB (better than N/A)
+        ttft_s = ttfb_s
 
-    tokens_per_second = None
+    speed_e2e = None
+    speed_gen = None
     if isinstance(completion_tokens, int) and total_time_s > 0:
-        gen_time = total_time_s - (ttft_s if ttft_s == ttft_s else 0.0)  # handle NaN
-        if gen_time > 0:
-            tokens_per_second = completion_tokens / gen_time
+        speed_e2e = completion_tokens / total_time_s
 
-    return total_time_s, ttft_s, prompt_tokens, completion_tokens, tokens_per_second
+        # gen time based on TTFT; clamp to avoid divide-by-near-zero silliness
+        if ttft_s == ttft_s:  # not NaN
+            gen_time = total_time_s - ttft_s
+            if gen_time > 0.001:
+                speed_gen = completion_tokens / gen_time
+
+    return total_time_s, ttfb_s, ttft_s, prompt_tokens, completion_tokens, speed_e2e, speed_gen
 
 
 def benchmark_vllm(
@@ -307,6 +330,9 @@ def benchmark_vllm(
         f"Timeout     : {timeout:.1f}s",
     ]
 
+    # If someone wants to see full URLs, they're still obvious from host + path.
+    # (You can add a --verbose flag later if you want to print the full ones.)
+
     print(_box("vLLM Benchmark", header_lines, width=width))
 
     totals: list[float] = []
@@ -317,47 +343,61 @@ def benchmark_vllm(
 
     table_w = width
     print(dim(_hr("─", table_w)))
-    print(f"{'#':>2}  {'Total(s)':>8}  {'TTFT':>10}  {'pTok':>5}  {'cTok':>5}  {'Speed(tok/s)':>13}")
+    print(f"{'#':>2}  {'Total(s)':>8}  {'TTFB':>10}  {'TTFT':>10}  {'pTok':>5}  {'cTok':>5}  {'e2e(tok/s)':>11}  {'gen(tok/s)':>11}")
     print(dim(_hr("─", table_w)))
 
     for i in range(runs):
         if stream:
-            total_s, ttft_s, p_tok, c_tok, tps = run_once_stream(
+            total_s, ttfb_s, ttft_s, p_tok, c_tok, tps_e2e, tps_gen = run_once_stream(
                 chat_endpoint, model_name, prompt, max_tokens, temperature, timeout
             )
             totals.append(total_s)
             if ttft_s == ttft_s:  # not NaN
                 ttfts.append(ttft_s)
+
+            # For summary stats, use the stable end-to-end speed
+            if isinstance(tps_e2e, (int, float)) and tps_e2e == tps_e2e:
+                speeds.append(float(tps_e2e))
         else:
-            total_s, p_tok, c_tok, tps = run_once_non_stream(
+            total_s, p_tok, c_tok, tps_e2e = run_once_non_stream(
                 chat_endpoint, model_name, prompt, max_tokens, temperature, timeout
             )
             totals.append(total_s)
-            ttft_s = float("nan")
 
-        if isinstance(tps, (int, float)) and tps == tps:
-            speeds.append(float(tps))
+            ttfb_s = float("nan")
+            ttft_s = float("nan")
+            tps_gen = None
+
+            if isinstance(tps_e2e, (int, float)) and tps_e2e == tps_e2e:
+                speeds.append(float(tps_e2e))
 
         if isinstance(p_tok, int):
             prompt_tok_seen = p_tok
         if isinstance(c_tok, int):
             completion_tok_seen = c_tok
 
+        # Format values
+        ttfb_str = _fmt_ms(ttfb_s) if stream else "N/A"
         ttft_str = _fmt_ms(ttft_s) if stream else "N/A"
-        speed_str = _fmt_num(tps, "{:.2f}")
+        e2e_str = _fmt_num(tps_e2e, "{:.2f}")
+        gen_str = _fmt_num(tps_gen, "{:.2f}") if stream else "N/A"
 
-        # Light color accents:
+        # Light color accents
         total_disp = f"{total_s:>8.3f}"
+        ttfb_disp = cyan(f"{ttfb_str:>10}") if stream and ttfb_str != "N/A" else f"{ttfb_str:>10}"
         ttft_disp = cyan(f"{ttft_str:>10}") if stream and ttft_str != "N/A" else f"{ttft_str:>10}"
-        speed_disp = green(f"{speed_str:>13}") if speed_str != "N/A" else f"{speed_str:>13}"
+        e2e_disp = green(f"{e2e_str:>11}") if e2e_str != "N/A" else f"{e2e_str:>11}"
+        gen_disp = green(f"{gen_str:>11}") if stream and gen_str != "N/A" else f"{gen_str:>11}"
 
         print(
             f"{i+1:>2}  "
             f"{total_disp}  "
+            f"{ttfb_disp}  "
             f"{ttft_disp}  "
             f"{(str(p_tok) if isinstance(p_tok, int) else '?'):>5}  "
             f"{(str(c_tok) if isinstance(c_tok, int) else '?'):>5}  "
-            f"{speed_disp}"
+            f"{e2e_disp}  "
+            f"{gen_disp}"
         )
 
     print(dim(_hr("─", table_w)))
@@ -380,7 +420,7 @@ def benchmark_vllm(
         f"TTFT        : avg {cyan(_fmt_ms(avg_ttft))} | p50 {_fmt_ms(p50_ttft)} | p95 {_fmt_ms(p95_ttft)}"
         if stream
         else "TTFT        : N/A (run with --stream)",
-        f"Speed       : avg {green(_fmt_num(avg_speed))} tok/s | p50 {_fmt_num(p50_speed)} | p95 {_fmt_num(p95_speed)}"
+        f"Speed(e2e)  : avg {green(_fmt_num(avg_speed))} tok/s | p50 {_fmt_num(p50_speed)} | p95 {_fmt_num(p95_speed)}"
         if speeds
         else "Speed       : N/A (usage not returned by server)",
         f"Tokens      : prompt {prompt_tok_seen if prompt_tok_seen is not None else '?'} | completion {completion_tok_seen if completion_tok_seen is not None else '?'}",
