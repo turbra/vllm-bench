@@ -15,7 +15,8 @@ It measures:
 
 Output is formatted with box/table summaries and **ANSI color** (auto-disabled when stdout is not a TTY).
 
-<img width="781" height="648" alt="image" src="https://github.com/user-attachments/assets/c30b65c1-2132-4ef2-9f14-7e1c5bf96751" />
+<img width="781" height="650" alt="image" src="https://github.com/user-attachments/assets/01d54a45-ffc6-4b83-bee0-30a3d1a477e5" />
+
 
 ---
 
