@@ -1,10 +1,3 @@
-* **Option 1:** Run the scripts directly (CLI)
-* **Option 2:** Run the web UI via Docker
-
-It also **strongly recommends `--server`** (no editing code), keeps your existing sections, and adds a small “Web UI (Docker)” quick start. Based on your current README content. 
-
----
-
 # vLLM Perf Tools (CLI + Web UI)
 
 Two small, dependency-light tools for testing **vLLM** deployments that expose the **OpenAI-compatible Chat Completions API**.
