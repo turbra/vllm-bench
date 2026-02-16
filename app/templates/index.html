@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>vLLM Perf Web</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand__title">vLLM Perf</div>
+        <div class="brand__sub">bench + load tests • terminal vibe • web UI</div>
+      </div>
+      <div class="topbar__right"></div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panel__title">Configure</div>
+
+        <div class="tabs">
+          <button class="tab tab--active" data-tab="bench">Bench</button>
+          <button class="tab" data-tab="load">Load</button>
+        </div>
+
+        <div class="form">
+          <label>Server (base URL)</label>
+          <input id="server" placeholder="https://my-vllm.apps.example.net" />
+
+          <div class="row2">
+            <div>
+              <label>Model (optional)</label>
+              <input id="model" placeholder="leave blank to use /v1/models" />
+            </div>
+            <div>
+              <label>Timeout (s)</label>
+              <input id="timeout" type="number" value="120" min="1" />
+            </div>
+          </div>
+
+          <label>Prompt</label>
+          <textarea id="prompt" rows="6">Design a small web service that exposes a REST API for managing tasks. Requirements:
+- Use plain English (no code)
+- Describe endpoints, request/response shapes, and error handling
+- Include exactly 5 endpoints
+- Keep the answer under 400 words (Request {i})</textarea>
+
+          <div class="row2">
+            <div>
+              <label>Max tokens</label>
+              <input id="max_tokens" type="number" value="512" min="1" />
+            </div>
+            <div>
+              <label>Temperature</label>
+              <input id="temperature" type="number" value="0.8" step="0.1" min="0" max="2" />
+            </div>
+          </div>
+
+          <div class="row2">
+            <div class="checkline">
+              <input id="stream" type="checkbox" checked />
+              <label for="stream">stream (TTFB/TTFT)</label>
+            </div>
+            <div class="checkline">
+              <input id="insecure" type="checkbox" />
+              <label for="insecure">insecure (skip TLS verify)</label>
+            </div>
+          </div>
+
+          <details class="details">
+            <summary>Auth (Bearer token)</summary>
+            <label>Token (optional)</label>
+            <input id="token" type="password" placeholder="paste token here" />
+            <div class="hint">Token is sent as <code>Authorization: Bearer ...</code>. It is not displayed in output.</div>
+          </details>
+
+          <div id="benchFields">
+            <div class="row2">
+              <div>
+                <label>Runs</label>
+                <input id="runs" type="number" value="5" min="1" />
+              </div>
+              <div class="hintbox">
+                <div class="hint">Bench = one request, repeated <b>Runs</b> times.</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="loadFields" class="hidden">
+            <div class="row2">
+              <div>
+                <label>Requests</label>
+                <input id="requests" type="number" value="20" min="1" />
+              </div>
+              <div>
+                <label>Concurrency</label>
+                <input id="concurrency" type="number" value="20" min="1" />
+              </div>
+            </div>
+            <div class="hint">Load = send <b>Requests</b> total, with at most <b>Concurrency</b> in flight.</div>
+          </div>
+
+          <div class="actions">
+            <button id="run" class="btn">Run</button>
+            <button id="clear" class="btn btn--ghost">Clear</button>
+            <a id="download" class="btn btn--ghost disabled" href="#" download="result.json">Download JSON</a>
+          </div>
+
+          <div id="status" class="status dim">Idle.</div>
+        </div>
+      </section>
+
+      <section class="panel panel--right">
+        <div class="panel__title">Results</div>
+
+        <div id="headerBox" class="box"></div>
+
+        <details class="details" open>
+          <summary>Legend (columns)</summary>
+          <div class="hint">
+            <div><span class="dim">Total(s)</span>: end-to-end request time (seconds)</div>
+            <div><span class="dim">TTFB</span>: time to first byte (milliseconds) — first streamed server event</div>
+            <div><span class="dim">TTFT</span>: time to first generated token (milliseconds) — first <code>delta.content</code></div>
+            <div><span class="dim">pTok</span>: prompt tokens (<code>usage.prompt_tokens</code>)</div>
+            <div><span class="dim">cTok</span>: completion tokens (<code>usage.completion_tokens</code>)</div>
+            <div><span class="dim">e2e(tok/s)</span>: end-to-end speed, approx <code>cTok / Total</code></div>
+            <div><span class="dim">gen(tok/s)</span>: generation-only speed, approx <code>cTok / (Total - TTFT)</code> (stream mode)</div>
+            <div class="dim" style="margin-top:8px;">Note: if the server doesn’t return <code>usage</code>, pTok/cTok and derived speeds may show as <code>?</code> / <code>N/A</code>.</div>
+          </div>
+        </details>
+
+        <div class="tableWrap">
+          <table class="table" id="resultsTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Total(s)</th>
+                <th>TTFB</th>
+                <th>TTFT</th>
+                <th>pTok</th>
+                <th>cTok</th>
+                <th>e2e(tok/s)</th>
+                <th>gen(tok/s)</th>
+                <th>HTTP</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+
+        <div id="summaryBox" class="box"></div>
+      </section>
+    </main>
+  </div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
