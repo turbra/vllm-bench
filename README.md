@@ -1,5 +1,3 @@
-Here’s an updated **single README** that clearly supports **both options**:
-
 * **Option 1:** Run the scripts directly (CLI)
 * **Option 2:** Run the web UI via Docker
 
@@ -150,6 +148,8 @@ In the UI you can enter:
 * Optional token
 * Optional `--insecure` / skip TLS verify
 * Bench vs Load settings (runs, requests, concurrency, stream, max_tokens, etc.)
+
+<img width="1290" height="947" alt="image" src="https://github.com/user-attachments/assets/6b727c5f-90f4-49ba-8746-9d95a894de9a" />
 
 ---
 
