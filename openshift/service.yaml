@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-bench
+  labels:
+    app: vllm-bench
+spec:
+  selector:
+    app: vllm-bench
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
