@@ -9,15 +9,15 @@
 ## Prereqs
 
 - You are logged into the target cluster:
-  ```bash
+```bash
   oc whoami
-````
+```
 
 * You have a target namespace/project (create one if needed):
 
-  ```bash
+```bash
   oc new-project vllm-bench
-  ```
+```
 
 ## 1) Update the image in `deployment.yaml` (required)
 
